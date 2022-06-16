@@ -31,7 +31,6 @@ class SelfDistillation():
 
         self.optimizer = torch.optim.SGD(self.student.parameters(), lr=lr, weight_decay=weight_decay, momentum=0.9)
 
-        self.teacher.load_state_dict(self.student.state_dict())
         for s in self.teacher.parameters():
             s.requires_grad = False
         self.teacher.eval()
@@ -122,7 +121,6 @@ class SelfDistillation():
                         _, pre = torch.max(x_s, dim=1)
                         loss = criterion(x_s, x_t, y)
                 else:
-                    raise NotImplementedError
                     x_s = self.student(x)  # N, 60
                     _, pre = torch.max(x, dim=1)
                     loss = criterion(x_s, x_t, y)
