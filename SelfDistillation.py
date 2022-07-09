@@ -17,7 +17,6 @@ class SelfDistillation():
     def __init__(self, train_loader, test_loader_predict,
                  lr=0.1, weight_decay=1e-4, test_loader_student=None
                  ):
-        self.momentum = 0.9
         self.lr = lr
         self.train_loader = train_loader
         self.test_loader_predict = test_loader_predict
@@ -33,7 +32,6 @@ class SelfDistillation():
 
         for s in self.teacher.parameters():
             s.requires_grad = False
-        self.teacher.eval()
 
     def load_model(self):
         if os.path.exists('teacher.pth'):
@@ -46,9 +44,11 @@ class SelfDistillation():
             print('-' * 100)
 
     @torch.no_grad()
-    def momentum_sychronize(self, m=0.999):
+    def momentum_sychronize(self, m=0.9):
         for s, t in zip(self.student.parameters(), self.teacher.parameters()):
             t.mul_(m).add_((1-m)*s.data)
+#         for s, t in zip(self.student.buffers(), self.teacher.buffers()):
+#             t.mul_(m).add_((1-m)*s.data)
 
     @staticmethod
     def chr_loss(s_x, t_x, label, alpha=1, beta=0.2, t=5):
@@ -74,10 +74,10 @@ class SelfDistillation():
     def predict(self):
         with torch.no_grad():
             print('student are giving his predictions!')
-            self.student.eval()
+            self.teacher.eval()
             for x, names in tqdm(self.test_loader_predict):
                 x = x.to(self.device)
-                x = self.student(x)
+                x = self.teacher(x)
                 for i, name in enumerate(list(names)):
                     self.result[name] = x[i, :].unsqueeze(0)  # 1, D
 
@@ -88,19 +88,18 @@ class SelfDistillation():
               total_epoch=3,
               label_smoothing=0.2,
               fp16=True,
-              warmup_epoch=1,
-              warmup_cycle=12000,
               ):
         from torch.cuda.amp import autocast, GradScaler
+        from CutMix import cutmix
+        from mixup import mixup
         scaler = GradScaler()
         prev_loss = 999
         train_loss = 99
         criterion = self.chr_loss
-        self.teacher.eval()
         for epoch in range(1, total_epoch + 1):
             # first, predict
-            #             self.predict()
-            #             self.result = self.save_result(epoch)
+#             self.TTA()
+#             self.result = self.save_result()
 
             self.student.train()
             self.warm_up(epoch+10, now_loss=train_loss, prev_loss=prev_loss)
@@ -112,6 +111,7 @@ class SelfDistillation():
             for x, y in pbar:
                 x = x.to(self.device)
                 y = y.to(self.device)
+                x, y = mixup(x, y)
 
                 with torch.no_grad():
                     x_t = self.teacher(x)
@@ -122,7 +122,7 @@ class SelfDistillation():
                         loss = criterion(x_s, x_t, y)
                 else:
                     x_s = self.student(x)  # N, 60
-                    _, pre = torch.max(x, dim=1)
+                    _, pre = torch.max(x_s, dim=1)
                     loss = criterion(x_s, x_t, y)
 
                 if pre.shape != y.shape:
@@ -161,21 +161,21 @@ class SelfDistillation():
             self.optimizer.param_groups[0]['lr'] = self.lr * epoch / 10
         elif now_loss is not None and prev_loss is not None:
             delta = prev_loss - now_loss
-            if delta / now_loss < 0.02 and delta < 0.02:
+            if delta / now_loss < 0.03 and delta < 0.05:
                 self.optimizer.param_groups[0]['lr'] *= 0.9
 
         p_lr = self.optimizer.param_groups[0]['lr']
         print(f'lr = {p_lr}')
 
     @torch.no_grad()
-    def TTA(self, total_epoch=10, aug_weight=0.5):
+    def TTA(self, total_epoch=100, aug_weight=0.5):
         self.predict()
         print('now we are doing TTA')
         for epoch in range(1, total_epoch + 1):
-            self.student.eval()
+            self.teacher.eval()
             for x, names in tqdm(self.test_loader_student):
                 x = x.to(self.device)
-                x = self.student(x)
+                x = self.teacher(x)
                 for i, name in enumerate(list(names)):
                     self.result[name] += x[i, :].unsqueeze(0) * aug_weight  # 1, D
 
